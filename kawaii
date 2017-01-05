@@ -1,0 +1,151 @@
+#!/bin/sh
+# kawaii -- autoconexión a redes wifi en OpenWRT / LEDE / MallaCritica
+#
+# © 2017 rené <rene@partidopirata.com.ar>
+#
+# Copying and distribution of this file, with or without modification,
+# are permitted in any medium without royalty provided the copyright
+# notice and this notice are preserved.  This file is offered as-is,
+# without any warranty.
+
+APP="kawaii"
+# La interfaz a conectar, por defecto wlan0
+IFACE=${1:-wlan0}
+# El archivo CSV con las conexiones conocidas en el siguiente formato:
+#
+# ESSID;cifrado;mac (opcional);contraseña;
+LIST="${2:-kawaii.csv}"
+
+function log() {
+  logger "${APP}: $@"
+}
+
+# * Setear una MAC de celular
+#
+# Algunas redes abiertas filtran las MAC por vendor
+function set_cellphone_mac() {
+  # Motorola Mobile Device
+  macchanger --mac=00:14:9A:AA:BB:CC ${IFACE}
+}
+
+# * Correr macchanger -e para randomizar el final de la MAC (mantener el
+# vendor)
+function set_random_mac() {
+  macchanger --ending ${IFACE}
+}
+
+function get_current_mac() {
+  ifconfig ${IFACE} | grep ether | tr -s " " | cut -d " " -f3
+}
+
+# * Levantar la interfaz
+function iface_up() {
+  ifconfig ${IFACE} up
+}
+
+function iface_down() {
+  ifconfig ${IFACE} down
+}
+
+# * Hacer un escaneo
+function iface_scan() {
+  iwlist ${IFACE} scan
+}
+
+# * Recolectar todos los SSID, armando un CSV con SSID y señal, ordenada
+# por señal
+function collect_essid() {
+  grep -E "Quality=|ESSID:" \
+  | sed -re "s/^.*(Signal level=|ESSID:\")//" \
+  | tr "\n" " " \
+  | sed -re "s/\" ?/\n/g" \
+  | sed -re "s/ dBm /;/" \
+  | sort -t ";"
+}
+
+# * Por cada SSID, buscar en un CSV si está disponible
+function search_ssid() {
+  grep "^$1;" "${LIST}"
+}
+
+# Encontrar una opción dentro del CSV
+# 
+# Uso: search_ssid "SSID" | get_ssid_option (key|encrypt)
+function get_ssid_option() {
+  local _ssid="$1" ; shift
+  local _order=0
+
+  case $1 in
+    key)
+      _order=3- ;;
+    encrypt)
+      _order=2 ;;
+  esac
+
+  cut -d ';' -f ${_order}
+}
+
+# * Por cada SSID disponible, intentar conectar
+function connect() {
+  local _uci_set="uci set wireless.@wifi-iface[1]"
+  local _ssid="$1" ; shift
+
+  # Obtiene la MAC opcional o usa la randomizada
+  local _mac="$(search_ssid "${_ssid}" | get_ssid_option max)"
+  if test -z "${_mac}" ; then
+    _mac="$2"; shift
+  fi
+
+  wifi off
+
+  # XXX volver elegante
+  ${uci_set}="wifi-iface"
+  ${uci_set}.mode="sta"
+  ${uci_set}.network="wan"
+  ${uci_set}.macaddr="${_mac}"
+  ${uci_set}.device="${IFACE}"
+  ${uci_set}.ssid="${_ssid}"
+  ${uci_set}.encrypt="$(search_ssid "${_ssid}" | get_ssid_option encrypt)"
+  ${uci_set}.key="$(search_ssid "${_ssid}" | get_ssid_option key)"
+
+  uci commit wireless
+  /etc/init.d/network restart
+}
+
+# * Al conectar, probar disponibilidad de Internet (ping, wget)
+function test_internet () {
+  wget http://librevpn.org.ar -q
+}
+
+# * Opcionalmente, resolver portal cautivo
+# TODO
+
+# * Reiniciar servicios que dependan de Internet (ej. VPN)
+# TODO
+
+function main() {
+  iface_down
+  set_cellphone_mac
+  set_random_mac
+  iface_up
+
+  local _mac="$(get_current_mac)"
+
+  iface_scan | collect_essid | while read _connection; do
+    _connection="$(echo "${_connection}" | cut -d ';' -f2-)"
+
+    log "Buscando ${_connection}"
+    # Continuar si la red no está configurada
+    search_essid "${_connection}" >/dev/null || continue
+
+    log "Intentando conectar a ${_connection}"
+    connect "${_connection}"
+
+    log "Conectado a ${_connection}, probando acceso a Internet"
+    test_internet || continue
+
+    log "Conectado!"
+  done
+}
+
+main
