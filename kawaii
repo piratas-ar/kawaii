@@ -139,7 +139,7 @@ function main() {
     search_essid "${_connection}" >/dev/null || continue
 
     log "Intentando conectar a ${_connection}"
-    connect "${_connection}"
+    connect "${_connection}" "${_mac}"
 
     log "Conectado a ${_connection}, probando acceso a Internet"
     test_internet || continue
