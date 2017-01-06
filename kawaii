@@ -59,7 +59,7 @@ function collect_essid() {
   | sed -re "s/^.*(Signal level=|ESSID:\")//" \
   | tr "\n" " " \
   | sed -re "s/\" ?/\n/g" \
-  | sed -re "s/ dBm /;/" \
+  | sed -re "s/ dBm */;/" \
   | sort -t ";"
 }
 
@@ -72,12 +72,13 @@ function search_ssid() {
 # 
 # Uso: search_ssid "SSID" | get_ssid_option (key|encrypt)
 function get_ssid_option() {
-  local _ssid="$1" ; shift
   local _order=0
 
   case $1 in
     key)
-      _order=3- ;;
+      _order=4- ;;
+    mac)
+      _order=3 ;;
     encrypt)
       _order=2 ;;
   esac
@@ -87,11 +88,11 @@ function get_ssid_option() {
 
 # * Por cada SSID disponible, intentar conectar
 function connect() {
-  local _uci_set="uci set wireless.@wifi-iface[1]"
+  local _uci_set="echo uci set wireless.@wifi-iface[1]"
   local _ssid="$1" ; shift
 
   # Obtiene la MAC opcional o usa la randomizada
-  local _mac="$(search_ssid "${_ssid}" | get_ssid_option max)"
+  local _mac="$(search_ssid "${_ssid}" | get_ssid_option mac)"
   if test -z "${_mac}" ; then
     _mac="$2"; shift
   fi
@@ -99,14 +100,14 @@ function connect() {
   wifi off
 
   # XXX volver elegante
-  ${uci_set}="wifi-iface"
-  ${uci_set}.mode="sta"
-  ${uci_set}.network="wan"
-  ${uci_set}.macaddr="${_mac}"
-  ${uci_set}.device="${IFACE}"
-  ${uci_set}.ssid="${_ssid}"
-  ${uci_set}.encrypt="$(search_ssid "${_ssid}" | get_ssid_option encrypt)"
-  ${uci_set}.key="$(search_ssid "${_ssid}" | get_ssid_option key)"
+  ${_uci_set}="wifi-iface"
+  ${_uci_set}.mode="sta"
+  ${_uci_set}.network="wan"
+  ${_uci_set}.macaddr="${_mac}"
+  ${_uci_set}.device="${IFACE}"
+  ${_uci_set}.ssid="${_ssid}"
+  ${_uci_set}.encrypt="$(search_ssid "${_ssid}" | get_ssid_option encrypt)"
+  ${_uci_set}.key="$(search_ssid "${_ssid}" | get_ssid_option key)"
 
   uci commit wireless
   /etc/init.d/network restart
@@ -136,7 +137,7 @@ function main() {
 
     log "Buscando ${_connection}"
     # Continuar si la red no está configurada
-    search_essid "${_connection}" >/dev/null || continue
+    search_ssid "${_connection}" >/dev/null || continue
 
     log "Intentando conectar a ${_connection}"
     connect "${_connection}" "${_mac}"
@@ -145,6 +146,7 @@ function main() {
     test_internet || continue
 
     log "Conectado!"
+    break
   done
 }
 
